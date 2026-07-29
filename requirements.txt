@@ -1,0 +1,15 @@
+flask==3.1.0
+flask-cors==5.0.0
+supabase==2.10.0
+google-auth==2.38.0
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0
+google-api-python-client==2.161.0
+cryptography==41.0.7
+reportlab==4.3.1
+openpyxl==3.1.5
+python-dotenv==1.1.0
+gunicorn==23.0.0
+requests==2.32.3
+pytz==2025.1
+pydantic==1.10.18
