@@ -434,6 +434,126 @@ def delete_budget(budget_id):
     return jsonify({"ok": True})
 
 
+# ── Transfer Rules ─────────────────────────────────────────────────────────────
+
+@bp.get("/transfer-rules")
+@require_auth
+def list_transfer_rules():
+    """Return all transfer detection rules for the user."""
+    client = get_admin_client()
+    rows = (
+        client.table("transfer_rules")
+        .select(
+            "*,"
+            "from_account:from_account_id(id,name),"
+            "to_account:to_account_id(id,name)"
+        )
+        .eq("user_id", g.user_id)
+        .order("created_at", desc=False)
+        .execute()
+    ).data or []
+    return jsonify({"transfer_rules": rows})
+
+
+@bp.post("/transfer-rules")
+@require_auth
+def create_transfer_rule():
+    """
+    Create a transfer detection rule.
+    Body: {name?, from_account_id?, debit_pattern, to_account_id?, credit_pattern, time_window_minutes?}
+    """
+    client = get_admin_client()
+    data = request.get_json(silent=True) or {}
+
+    debit_pattern  = (data.get("debit_pattern") or "").strip()
+    credit_pattern = (data.get("credit_pattern") or "").strip()
+    if not debit_pattern:
+        return jsonify({"error": "'debit_pattern' is required"}), 400
+    if not credit_pattern:
+        return jsonify({"error": "'credit_pattern' is required"}), 400
+
+    try:
+        window = int(data.get("time_window_minutes") or 60)
+        if window < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"error": "'time_window_minutes' must be a positive integer"}), 400
+
+    row = {
+        "user_id":              g.user_id,
+        "name":                 (data.get("name") or "").strip() or None,
+        "from_account_id":      data.get("from_account_id") or None,
+        "debit_pattern":        debit_pattern,
+        "to_account_id":        data.get("to_account_id") or None,
+        "credit_pattern":       credit_pattern,
+        "time_window_minutes":  window,
+        "is_active":            True,
+    }
+    result = client.table("transfer_rules").insert(row).execute()
+    created = result.data[0] if result.data else row
+    log_audit(
+        user_id=g.user_id,
+        action_type="settings_updated",
+        description=f"Transfer rule created: '{debit_pattern}' → '{credit_pattern}'",
+        ip_address=request.remote_addr,
+    )
+    return jsonify({"transfer_rule": created}), 201
+
+
+@bp.put("/transfer-rules/<rule_id>")
+@require_auth
+def update_transfer_rule(rule_id):
+    """Update an existing transfer rule."""
+    client = get_admin_client()
+    rows = (
+        client.table("transfer_rules")
+        .select("id")
+        .eq("id", rule_id)
+        .eq("user_id", g.user_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        return jsonify({"error": "Rule not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    allowed = [
+        "name", "from_account_id", "debit_pattern",
+        "to_account_id", "credit_pattern", "time_window_minutes", "is_active",
+    ]
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return jsonify({"error": "Nothing to update"}), 400
+
+    if "time_window_minutes" in updates:
+        try:
+            updates["time_window_minutes"] = int(updates["time_window_minutes"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "'time_window_minutes' must be an integer"}), 400
+
+    result = client.table("transfer_rules").update(updates).eq("id", rule_id).execute()
+    return jsonify({"transfer_rule": result.data[0] if result.data else {}})
+
+
+@bp.delete("/transfer-rules/<rule_id>")
+@require_auth
+def delete_transfer_rule(rule_id):
+    """Delete a transfer detection rule."""
+    client = get_admin_client()
+    rows = (
+        client.table("transfer_rules")
+        .select("id")
+        .eq("id", rule_id)
+        .eq("user_id", g.user_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        return jsonify({"error": "Rule not found"}), 404
+    client.table("transfer_rules").delete().eq("id", rule_id).execute()
+    return jsonify({"ok": True})
+
+
 # ── Audit log ──────────────────────────────────────────────────────────────────
 
 @bp.get("/audit-log")

@@ -172,6 +172,23 @@ def sync_all_accounts(user_id: str, triggered_by: str = "cron") -> dict:
             combined["failed_imports_count"] += result.get("failed_imports_count", 0)
             combined["alert_messages"].extend(result.get("alert_messages", []))
 
+    # ── Transfer detection ─────────────────────────────────────────────────────
+    # Run after all email syncs so newly-inserted transactions are visible.
+    # Non-critical — a detection failure must never break the sync response.
+    try:
+        from services.transfer_detection import detect_and_link_transfers
+        td = detect_and_link_transfers(user_id)
+        if td["pairs_linked"] > 0:
+            combined["alert_messages"].append(
+                f"Auto-linked {td['pairs_linked']} transfer pair(s)"
+            )
+        logger.info(
+            "Transfer detection: %d rule(s) checked, %d pair(s) linked for user %s",
+            td["rules_checked"], td["pairs_linked"], user_id,
+        )
+    except Exception as _td_exc:
+        logger.warning("Transfer detection failed (non-critical): %s", _td_exc)
+
     compile_digest(user_id, combined.get("alert_messages", []))
     return combined
 
