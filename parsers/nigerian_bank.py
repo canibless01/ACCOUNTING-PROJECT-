@@ -349,13 +349,37 @@ class NigerianBankParser(BaseParser):
 
     @staticmethod
     def _strip_html(html: str) -> str:
+        """
+        Convert an HTML email body to plain text suitable for regex parsing.
+
+        Critical steps (in order):
+          1. Strip <head> — removes CSS/meta noise before any processing.
+          2. Strip <script>/<style> blocks.
+          3. Replace block-level / table-structure tags with whitespace so
+             adjacent values don't run together (e.g. "Amount:₦500" vs "Amount: ₦500").
+          4. Strip all remaining HTML tags.
+          5. Decode HTML entities — THIS is the step that converts the encoded
+             Naira symbol &#8358; back to ₦ (and &nbsp;, &amp;, etc.).
+             Without this step every HTML-only bank email fails because the ₦
+             regex never matches the raw entity string.
+          6. Collapse whitespace.
+        """
+        import html as _html_mod
         if not html:
             return ""
-        # Remove script/style blocks entirely
+        # 1. Remove entire <head> section (CSS, meta, title = pure noise for parsing)
+        html = re.sub(r"<head[^>]*>.*?</head>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+        # 2. Remove script/style blocks
         html = re.sub(r"<(script|style)[^>]*>.*?</(script|style)>", " ", html, flags=re.DOTALL | re.IGNORECASE)
-        # Replace block-level tags with newlines for readability
-        html = re.sub(r"<(?:br|p|div|tr|li)[^>]*>", "\n", html, flags=re.IGNORECASE)
-        # Strip remaining tags
+        # 3a. Block-level tags → newline (preserves label-value line separation)
+        html = re.sub(r"<(?:br|p|div|tr|li|h[1-6])[^>]*>", "\n", html, flags=re.IGNORECASE)
+        # 3b. Table cells → space (so "Amount:₦500" doesn't become "Amount:₦500" with no gap)
+        html = re.sub(r"<(?:td|th)[^>]*>", " ", html, flags=re.IGNORECASE)
+        # 4. Strip all remaining tags
         html = re.sub(r"<[^>]+>", " ", html)
-        # Collapse whitespace
-        return re.sub(r"[ \t]+", " ", html).strip()
+        # 5. Decode HTML entities: &#8358; → ₦, &nbsp; → space, &amp; → &, etc.
+        html = _html_mod.unescape(html)
+        # 6. Collapse horizontal whitespace; reduce excessive blank lines
+        html = re.sub(r"[ \t]+", " ", html)
+        html = re.sub(r"\n{3,}", "\n\n", html)
+        return html.strip()
