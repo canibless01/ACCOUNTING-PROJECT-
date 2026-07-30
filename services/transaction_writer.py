@@ -71,7 +71,8 @@ def write_transaction(
         return None, "duplicate"
 
     # ── 3. Determine type ──────────────────────────────────────────────────────
-    tx_type = "income" if parsed.direction == "credit" else "expense"
+    # Parsers may override via extra["type"] (e.g. Selar withdrawal = transfer)
+    tx_type = parsed.extra.get("type") or ("income" if parsed.direction == "credit" else "expense")
 
     # ── 4. Categorization ──────────────────────────────────────────────────────
     category_id, category_matched = categorize_transaction(

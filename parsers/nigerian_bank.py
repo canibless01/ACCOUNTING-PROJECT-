@@ -98,32 +98,42 @@ class NigerianBankParser(BaseParser):
 
     # ── Balance ────────────────────────────────────────────────────────────────
     # NIBSS standard: every bank alert has one of these.
+    # Handles both "Available Balance: ₦1,810.15" and PremiumTrust style
+    # "Available Balance  :NGN 1,810.15" (colon and NGN after the label).
+    _BAL_SUFFIX = r"[:\s]+[:\s]*(?:NGN|₦|N)?\s*([\d,]+\.?\d*)"
     _BALANCE_PATTERNS = [
-        re.compile(r"Available\s+Bal(?:ance)?[:\s]+[₦N]?\s*([\d,]+\.?\d*)", re.IGNORECASE),
-        re.compile(r"Avail(?:able)?\s+Bal(?:ance)?[:\s]+[₦N]?\s*([\d,]+\.?\d*)", re.IGNORECASE),
-        re.compile(r"Ledger\s+Bal(?:ance)?[:\s]+[₦N]?\s*([\d,]+\.?\d*)", re.IGNORECASE),
-        re.compile(r"Closing\s+Bal(?:ance)?[:\s]+[₦N]?\s*([\d,]+\.?\d*)", re.IGNORECASE),
-        re.compile(r"Current\s+Bal(?:ance)?[:\s]+[₦N]?\s*([\d,]+\.?\d*)", re.IGNORECASE),
-        re.compile(r"Account\s+Bal(?:ance)?[:\s]+[₦N]?\s*([\d,]+\.?\d*)", re.IGNORECASE),
+        re.compile(r"Available\s+Bal(?:ance)?" + r"[:\s]+[:\s]*(?:NGN|₦|N)?\s*([\d,]+\.?\d*)", re.IGNORECASE),
+        re.compile(r"Avail(?:able)?\s+Bal(?:ance)?" + r"[:\s]+[:\s]*(?:NGN|₦|N)?\s*([\d,]+\.?\d*)", re.IGNORECASE),
+        re.compile(r"Ledger\s+Bal(?:ance)?" + r"[:\s]+[:\s]*(?:NGN|₦|N)?\s*([\d,]+\.?\d*)", re.IGNORECASE),
+        re.compile(r"Closing\s+Bal(?:ance)?" + r"[:\s]+[:\s]*(?:NGN|₦|N)?\s*([\d,]+\.?\d*)", re.IGNORECASE),
+        re.compile(r"Current\s+Bal(?:ance)?" + r"[:\s]+[:\s]*(?:NGN|₦|N)?\s*([\d,]+\.?\d*)", re.IGNORECASE),
+        re.compile(r"Account\s+Bal(?:ance)?" + r"[:\s]+[:\s]*(?:NGN|₦|N)?\s*([\d,]+\.?\d*)", re.IGNORECASE),
         # Generic fallback — "Balance: ₦12,000" anywhere in body
-        re.compile(r"Bal(?:ance)?[:\s]+[₦N]?\s*([\d,]+\.?\d*)", re.IGNORECASE),
+        re.compile(r"Bal(?:ance)?" + r"[:\s]+[:\s]*(?:NGN|₦|N)?\s*([\d,]+\.?\d*)", re.IGNORECASE),
     ]
 
     # ── Date/Time ──────────────────────────────────────────────────────────────
+    # _DATE_LABEL matches "Date", "Time", "Time of Transaction", "Value Date", etc.
+    _DATE_LABEL = r"(?:Time\s+of\s+Transaction|Value\s+Date|Date|Time)"
+
     _DATETIME_PATTERNS = [
         # DD/MM/YYYY HH:MM:SS [AM/PM]  or  DD/MM/YYYY HH:MM [AM/PM]
-        re.compile(r"(?:Date|Time)[:\s]+(\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?)", re.IGNORECASE),
-        # DD-Mon-YYYY HH:MM:SS [AM/PM] — includes optional AM/PM suffix
-        re.compile(r"(?:Date|Time)[:\s]+(\d{1,2}-\w{3,9}-\d{4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?)", re.IGNORECASE),
+        re.compile(r"(?:Time\s+of\s+Transaction|Date|Time)[:\s]+(\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?)", re.IGNORECASE),
+        # DD-Mon-YYYY HH:MM:SS [AM/PM]  — PremiumTrust: "28-JUL-2026 07:04:21 PM"
+        re.compile(r"(?:Time\s+of\s+Transaction|Date|Time)[:\s]+(\d{1,2}-\w{3,9}-\d{4}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?)", re.IGNORECASE),
+        # DD-Mon-YY HH:MM:SS [AM/PM]  — 2-digit year fallback
+        re.compile(r"(?:Time\s+of\s+Transaction|Date|Time)[:\s]+(\d{1,2}-\w{3,9}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp][Mm])?)", re.IGNORECASE),
         # ISO 8601
         re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"),
-        # Standalone date DD/MM/YYYY
-        re.compile(r"(?:Date)[:\s]+(\d{1,2}/\d{1,2}/\d{4})", re.IGNORECASE),
+        # Standalone date DD/MM/YYYY or DD-Mon-YYYY or DD-Mon-YY
+        re.compile(r"(?:Value\s+Date|Date)[:\s]+(\d{1,2}/\d{1,2}/\d{4})", re.IGNORECASE),
+        re.compile(r"(?:Value\s+Date|Date)[:\s]+(\d{1,2}-\w{3,9}-\d{4})", re.IGNORECASE),
+        re.compile(r"(?:Value\s+Date|Date)[:\s]+(\d{1,2}-\w{3,9}-\d{2})", re.IGNORECASE),
         # "Jan 15, 2024 02:35 PM" or "January 15, 2024"
         re.compile(r"(?:Date|Time)[:\s]+(\w{3,9}\s+\d{1,2},\s*\d{4}(?:\s+\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)?)", re.IGNORECASE),
     ]
     _DATE_FORMATS = [
-        # 24-hour formats
+        # 24-hour formats — 4-digit year
         "%d/%m/%Y %H:%M:%S",
         "%d/%m/%Y %H:%M",
         "%d-%b-%Y %H:%M:%S",
@@ -131,8 +141,10 @@ class NigerianBankParser(BaseParser):
         "%d-%B-%Y %H:%M:%S",
         "%d-%B-%Y %H:%M",
         "%d/%m/%Y",
+        "%d-%b-%Y",
+        "%d-%B-%Y",
         "%Y-%m-%dT%H:%M:%S",
-        # 12-hour AM/PM formats (must come after 24-hour)
+        # 12-hour AM/PM formats — 4-digit year (must come after 24-hour)
         "%d/%m/%Y %I:%M:%S %p",
         "%d/%m/%Y %I:%M %p",
         "%d-%b-%Y %I:%M:%S %p",
@@ -143,6 +155,13 @@ class NigerianBankParser(BaseParser):
         "%b %d, %Y %I:%M %p",
         "%B %d, %Y",
         "%b %d, %Y",
+        # 2-digit year variants (PremiumTrust Value Date: "28-JUL-26")
+        "%d-%b-%y %H:%M:%S",
+        "%d-%b-%y %H:%M",
+        "%d-%b-%y %I:%M:%S %p",
+        "%d-%b-%y %I:%M %p",
+        "%d-%b-%y",
+        "%d-%B-%y",
     ]
 
     # ── Non-transaction emails to silently skip ────────────────────────────────
@@ -169,7 +188,16 @@ class NigerianBankParser(BaseParser):
         body_html: str,
         received_at: datetime,
     ) -> ParsedTransaction:
-        body = body_plain.strip() if body_plain else self._strip_html(body_html)
+        # PremiumTrust (and similar HTML-only banks) sometimes have Gmail return
+        # the HTML source as the text/plain MIME part.  Detect this and strip it
+        # so the regex patterns see clean text regardless of MIME structure.
+        raw_plain = body_plain.strip() if body_plain else ""
+        if raw_plain and self._looks_like_html(raw_plain):
+            body = self._strip_html(raw_plain)
+        elif raw_plain:
+            body = raw_plain
+        else:
+            body = self._strip_html(body_html)
         combined = f"{subject}\n{body}"
 
         # ── 1. Skip obviously non-transaction emails ───────────────────────────

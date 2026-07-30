@@ -69,6 +69,24 @@ class BaseParser(ABC):
         return ref.strip().upper()
 
     @staticmethod
+    def _looks_like_html(text: str) -> bool:
+        """
+        Return True when text is raw HTML rather than readable plain text.
+
+        This happens when Gmail delivers an HTML-only email with mimeType
+        text/plain — the decoded body contains the full HTML source.  Both
+        parsers must strip it before applying their regexes.
+        """
+        import re as _re
+        stripped = text.lstrip()
+        # Definitive openers
+        if stripped.lower().startswith(("<!doctype", "<html", "<head")):
+            return True
+        # Count tag characters; if >5 % of content is inside angle brackets it's HTML
+        tag_chars = sum(len(m.group(0)) for m in _re.finditer(r"<[^>]{1,300}>", text))
+        return len(text) > 100 and tag_chars > len(text) * 0.05
+
+    @staticmethod
     def _first_match(pattern_list, text: str) -> re_match_type | None:
         """Try each compiled regex in order; return the first match."""
         import re

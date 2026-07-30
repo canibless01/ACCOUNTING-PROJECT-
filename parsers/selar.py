@@ -24,7 +24,7 @@ from parsers.base import BaseParser, NonTransactionEmail, ParseError, ParsedTran
 class SelarParser(BaseParser):
     VERSION = 2
 
-    # ── Subject keywords that definitively mean NOT a payment ─────────────────
+    # ── Subject keywords that definitively mean NOT a transaction ─────────────
     _NON_TX_SUBJECTS = [
         "abandoned",
         "cart",
@@ -34,8 +34,6 @@ class SelarParser(BaseParser):
         "product created",
         "product published",
         "welcome to selar",
-        "payout",          # payout emails go to bank directly — not an income tx
-        "withdrawal",
         "newsletter",
         "tips",
         "digest",
@@ -47,7 +45,7 @@ class SelarParser(BaseParser):
         "reset",
     ]
 
-    # ── Subject keywords that positively identify a payment email ─────────────
+    # ── Subject keywords that positively identify a payment / sale email ──────
     _PAYMENT_SUBJECTS = [
         "received a payment",
         "new order",
@@ -55,6 +53,30 @@ class SelarParser(BaseParser):
         "payment received",
         "purchase",
         "you made a sale",
+    ]
+
+    # ── Subject keywords that identify a withdrawal / payout email ────────────
+    # These are DEBIT + TRANSFER (money leaving Selar wallet to user's bank)
+    _WITHDRAWAL_SUBJECTS = [
+        "withdrawal initiated",
+        "withdrawal",
+        "payout",
+        "funds transfer",
+    ]
+
+    # ── Withdrawal-specific patterns ──────────────────────────────────────────
+    _WITHDRAWAL_AMOUNT_PATTERNS = [
+        r"Amount[:\s]+(?:NGN|₦|N)?\s*([\d,]+\.?\d*)",
+        r"[₦N]\s*([\d,]+\.?\d*)",
+        r"NGN\s*([\d,]+\.?\d*)",
+    ]
+    _WITHDRAWAL_BANK_PATTERNS = [
+        r"Bank[:\s]+(.+?)(?:\n|Account|$)",
+        r"Bank\s+Name[:\s]+(.+?)(?:\n|Account|$)",
+    ]
+    _WITHDRAWAL_ACCT_NAME_PATTERNS = [
+        r"Account\s+Name[:\s]+(.+?)(?:\n|Account\s+Number|Amount|$)",
+        r"Beneficiary[:\s]+(.+?)(?:\n|Account|Amount|$)",
     ]
 
     # Currency-flexible: handles ₦ (naira), N, $, €, £, ₹ and bare numbers under amount labels
@@ -111,7 +133,16 @@ class SelarParser(BaseParser):
         received_at: datetime,
     ) -> ParsedTransaction:
         subject_lower = subject.lower()
-        body = body_plain or self._strip_html(body_html)
+
+        # HTML-in-plain guard (same issue as PremiumTrust)
+        raw_plain = body_plain.strip() if body_plain else ""
+        if raw_plain and self._looks_like_html(raw_plain):
+            body = self._strip_html(raw_plain)
+        elif raw_plain:
+            body = raw_plain
+        else:
+            body = self._strip_html(body_html)
+
         combined_lower = f"{subject_lower} {body.lower()}"
 
         # ── Filter non-transaction emails FIRST ───────────────────────────────
@@ -120,6 +151,11 @@ class SelarParser(BaseParser):
                 raise NonTransactionEmail(
                     f"Selar: skipping non-transaction email '{subject}' (matched '{skip_kw}')"
                 )
+
+        # ── Withdrawal / payout emails → DEBIT + TRANSFER ─────────────────────
+        is_withdrawal = any(kw in subject_lower for kw in self._WITHDRAWAL_SUBJECTS)
+        if is_withdrawal:
+            return self._parse_withdrawal(subject, body, received_at)
 
         # ── Require at least one positive payment keyword ──────────────────────
         is_payment = any(kw in combined_lower for kw in self._PAYMENT_SUBJECTS)
@@ -169,6 +205,75 @@ class SelarParser(BaseParser):
             actual_balance=actual_balance,
             raw_subject=subject,
             parser_version=self.VERSION,
+        )
+
+    def _parse_withdrawal(
+        self,
+        subject: str,
+        body: str,
+        received_at: datetime,
+    ) -> ParsedTransaction:
+        """
+        Parse a Selar withdrawal / payout email.
+
+        These are transfers FROM the Selar wallet TO the user's bank account:
+          direction = 'debit'
+          type      = 'transfer'   (set via extra, applied by write_transaction)
+          needs_review = False      (auto-handled — not an expense)
+
+        Example email body (after HTML strip):
+          Bank: PALMPAY
+          Account Name: BLESSING NIFEMI OLUWASEGUN
+          Account Number: 7018412704
+          Amount: 20,000
+          Currency: NGN
+        """
+        # ── Amount ─────────────────────────────────────────────────────────────
+        amount: Optional[float] = None
+        for pat in self._WITHDRAWAL_AMOUNT_PATTERNS:
+            m = re.search(pat, body, re.IGNORECASE)
+            if m:
+                try:
+                    val = self.clean_amount(m.group(1))
+                    if val > 0:
+                        amount = val
+                        break
+                except (ValueError, AttributeError):
+                    continue
+        if amount is None:
+            raise ParseError("Selar withdrawal: could not extract amount")
+
+        # ── Reference ──────────────────────────────────────────────────────────
+        reference = self._extract_reference(body)
+        if not reference:
+            reference = f"SELAR-WD-{received_at.strftime('%Y%m%d%H%M%S')}-{int(amount)}"
+
+        # ── Narration: "Selar withdrawal → PALMPAY - BLESSING NIFEMI OLUWASEGUN" ─
+        bank = self._extract_pattern(self._WITHDRAWAL_BANK_PATTERNS, body)
+        acct_name = self._extract_pattern(self._WITHDRAWAL_ACCT_NAME_PATTERNS, body)
+        if bank and acct_name:
+            narration = f"Selar withdrawal → {bank.strip()} - {acct_name.strip()}"
+        elif bank:
+            narration = f"Selar withdrawal → {bank.strip()}"
+        elif acct_name:
+            narration = f"Selar withdrawal to {acct_name.strip()}"
+        else:
+            narration = "Selar wallet withdrawal"
+
+        # ── Date ───────────────────────────────────────────────────────────────
+        tx_datetime, tx_date = self._extract_date(body, received_at)
+
+        return ParsedTransaction(
+            reference=self.normalize_reference(reference),
+            amount=amount,
+            direction="debit",
+            date=tx_date,
+            date_time=tx_datetime,
+            narration=narration[:200],
+            actual_balance=None,
+            raw_subject=subject,
+            parser_version=self.VERSION,
+            extra={"type": "transfer"},  # write_transaction uses this to set tx type
         )
 
     def _extract_amount(self, body: str) -> Optional[float]:
@@ -226,6 +331,16 @@ class SelarParser(BaseParser):
 
     @staticmethod
     def _strip_html(html: str) -> str:
+        """Full HTML → plain text (same pipeline as NigerianBankParser)."""
+        import html as _html_mod
         if not html:
             return ""
-        return re.sub(r"<[^>]+>", " ", html)
+        html = re.sub(r"<head[^>]*>.*?</head>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r"<(script|style)[^>]*>.*?</(script|style)>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+        html = re.sub(r"<(?:br|p|div|tr|li|h[1-6])[^>]*>", "\n", html, flags=re.IGNORECASE)
+        html = re.sub(r"<(?:td|th)[^>]*>", " ", html, flags=re.IGNORECASE)
+        html = re.sub(r"<[^>]+>", " ", html)
+        html = _html_mod.unescape(html)
+        html = re.sub(r"[ \t]+", " ", html)
+        html = re.sub(r"\n{3,}", "\n\n", html)
+        return html.strip()

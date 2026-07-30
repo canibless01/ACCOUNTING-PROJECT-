@@ -55,7 +55,7 @@ class Config:
     CRON_SECRET: str                = os.environ["CRON_SECRET"]
 
     # ── Sync behaviour ────────────────────────────────────────────────────────
-    BACKFILL_DAYS: int              = int(os.environ.get("BACKFILL_DAYS", "90"))
+    BACKFILL_DAYS: int              = int(os.environ.get("BACKFILL_DAYS", "30"))
     GMAIL_MAX_RESULTS: int          = int(os.environ.get("GMAIL_MAX_RESULTS", "500"))
     SYNC_RETRY_DELAYS: list[int]    = [60, 300, 900, 3600]
 
